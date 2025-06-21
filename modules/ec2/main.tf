@@ -66,7 +66,7 @@ resource "aws_instance" "public" {
 resource "aws_instance" "private" {
   count                   = 2
   ami                    = var.ami_id
-  instance_type          = "t2.micro"
+  instance_type          = "t2.medium"
   subnet_id              = var.private_subnet_id
   vpc_security_group_ids = [aws_security_group.private.id]
   key_name               = var.key_name
