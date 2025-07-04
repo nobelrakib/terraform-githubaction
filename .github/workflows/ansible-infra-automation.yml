@@ -19,7 +19,6 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: k3s-cluster
 
     steps:
       - name: Checkout source code
@@ -32,6 +31,7 @@ jobs:
 
       - name: Create dynamic inventory
         run: |
+          cd ansible
           cat > inventory-dynamic.yml << EOF
           ---
           all:
@@ -41,7 +41,7 @@ jobs:
                   k3s-master-01:
                     ansible_host: 10.0.2.206
                     ansible_user: ubuntu
-                    ansible_ssh_private_key_file: ./dev-key.pem
+                    ansible_ssh_private_key_file: ~/k3s-cluster/dev-key.pem
                     node_role: master
                     node_type: control-plane
               k3s_workers:
@@ -49,11 +49,11 @@ jobs:
                   k3s-worker-01:
                     ansible_host: 10.0.2.20
                     ansible_user: ubuntu
-                    ansible_ssh_private_key_file: ./dev-key.pem
+                    ansible_ssh_private_key_file: ~/k3s-cluster/dev-key.pem
                   k3s-worker-02:
                     ansible_host: 10.0.2.21
                     ansible_user: ubuntu
-                    ansible_ssh_private_key_file: ./dev-key.pem
+                    ansible_ssh_private_key_file: ~/k3s-cluster/dev-key.pem
               k3s_cluster:
                 children:
                   k3s_masters:
@@ -67,12 +67,13 @@ jobs:
 
       - name: Create Ansible configuration
         run: |
+          cd ansible
           cat > ansible.cfg << EOF
           [defaults]
           host_key_checking = False
           inventory = inventory-dynamic.yml
           remote_user = ubuntu
-          private_key_file = ./dev-key.pem
+          private_key_file = ~/k3s-cluster/dev-key.pem
           timeout = 30
           gathering = smart
           fact_caching = memory
@@ -83,30 +84,36 @@ jobs:
 
       - name: Display inventory structure
         run: |
+          cd ansible
           echo "Displaying inventory structure..."
           ansible-inventory --list -y
 
       - name: Test connectivity to EC2 instances
         run: |
+          cd ansible
           echo "Testing connectivity to all nodes..."
           ansible all -m ping -v
 
       - name: Run K3s cluster setup playbook
         run: |
+          cd ansible
           echo "Deploying K3s multi-node cluster..."
           ansible-playbook k3s-multi-node-cluster.yml -v
 
       - name: Verify cluster deployment
         run: |
+          cd ansible
           echo "Verifying cluster deployment..."
           ansible k3s_masters -m shell -a "kubectl get nodes" -v
 
       - name: Get cluster information
         run: |
+          cd ansible
           echo "Getting cluster information..."
           ansible k3s_masters -m shell -a "kubectl cluster-info" -v
 
       - name: Check K3s service status
         run: |
+          cd ansible
           echo "Checking K3s service status on all nodes..."
           ansible all -m shell -a "systemctl status k3s" -v 
