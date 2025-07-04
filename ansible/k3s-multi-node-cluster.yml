@@ -1,0 +1,335 @@
+---
+# K3s Multi-Node Cluster Setup Playbook
+# This playbook installs K3s master and multiple worker nodes on EC2 Ubuntu instances
+
+- name: Setup K3s Multi-Node Cluster
+  hosts: all
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    k3s_version: "v1.28.5+k3s1"
+    k3s_token_file: "/var/lib/rancher/k3s/server/node-token"
+    k3s_config_dir: "/etc/rancher/k3s"
+    k3s_service_file: "/etc/systemd/system/k3s.service"
+  
+  pre_tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+- name: Setup K3s Master Node
+  hosts: k3s_masters
+  become: yes
+  
+  vars:
+    k3s_version: "v1.28.5+k3s1"
+    k3s_token_file: "/var/lib/rancher/k3s/server/node-token"
+    k3s_config_dir: "/etc/rancher/k3s"
+    k3s_service_file: "/etc/systemd/system/k3s.service"
+  
+  tasks:
+    - name: Create K3s config directory
+      file:
+        path: "{{ k3s_config_dir }}"
+        state: directory
+        mode: '0755'
+        
+    - name: Check if K3s is already installed
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_binary
+
+    - name: Download and install K3s server
+      shell: |
+        curl -sfL https://get.k3s.io | sh -
+      args:
+        creates: /usr/local/bin/k3s
+      register: k3s_install
+      failed_when: k3s_install.rc != 0
+
+    - name: Display K3s installation output
+      debug:
+        var: k3s_install.stdout_lines
+      when: k3s_install.stdout_lines is defined
+
+    - name: Display K3s installation errors
+      debug:
+        var: k3s_install.stderr_lines
+      when: k3s_install.stderr_lines is defined
+
+    - name: Verify K3s binary exists
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_binary_check
+
+    - name: Fail if K3s binary not found
+      fail:
+        msg: "K3s binary not found after installation"
+      when: not k3s_binary_check.stat.exists
+
+    - name: Start and enable K3s service
+      systemd:
+        name: k3s
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Wait for K3s service to be ready
+      shell: |
+        timeout 60 bash -c 'until kubectl get nodes 2>/dev/null; do sleep 2; done'
+      register: k3s_ready
+      retries: 30
+      delay: 10
+      until: k3s_ready.rc == 0
+
+    - name: Verify K3s API is accessible
+      shell: kubectl cluster-info
+      register: cluster_info_check
+      retries: 5
+      delay: 5
+      until: cluster_info_check.rc == 0
+
+    - name: Display cluster info
+      debug:
+        var: cluster_info_check.stdout_lines
+      
+    - name: Get node token
+      slurp:
+        src: "{{ k3s_token_file }}"
+      register: node_token
+      
+    - name: Set fact for node token
+      set_fact:
+        k3s_node_token: "{{ node_token.content | b64decode | trim }}"
+        
+    - name: Get kubeconfig
+      slurp:
+        src: /etc/rancher/k3s/k3s.yaml
+      register: kubeconfig
+      
+    - name: Set fact for kubeconfig
+      set_fact:
+        k3s_kubeconfig: "{{ kubeconfig.content | b64decode }}"
+        
+    - name: Verify master node is ready
+      shell: kubectl get nodes
+      register: nodes_output
+      
+    - name: Display nodes
+      debug:
+        var: nodes_output.stdout_lines
+
+    - name: Check K3s service status
+      shell: systemctl status k3s
+      register: k3s_service_status
+      ignore_errors: yes
+
+    - name: Display K3s service status
+      debug:
+        var: k3s_service_status.stdout_lines
+
+    - name: Check K3s logs
+      shell: journalctl -u k3s --no-pager -n 50
+      register: k3s_logs
+      ignore_errors: yes
+
+    - name: Display K3s logs
+      debug:
+        var: k3s_logs.stdout_lines
+
+- name: Setup K3s Worker Nodes
+  hosts: k3s_workers
+  become: yes
+  
+  vars:
+    k3s_version: "v1.28.5+k3s1"
+    k3s_token_file: "/var/lib/rancher/k3s/server/node-token"
+    k3s_config_dir: "/etc/rancher/k3s"
+    k3s_service_file: "/etc/systemd/system/k3s.service"
+  
+  tasks:
+    - name: Wait for master node token
+      set_fact:
+        k3s_node_token: "{{ hostvars[groups['k3s_masters'][0]]['k3s_node_token'] }}"
+        
+    - name: Get master node IP
+      set_fact:
+        master_ip: "{{ hostvars[groups['k3s_masters'][0]]['ansible_default_ipv4']['address'] }}"
+        
+    - name: Check if K3s agent is already installed
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_agent_binary
+
+    - name: Download and install K3s agent
+      shell: |
+        curl -sfL https://get.k3s.io | K3S_URL=https://{{ master_ip }}:6443 K3S_TOKEN={{ k3s_node_token }} sh -
+      args:
+        creates: /usr/local/bin/k3s
+      register: k3s_agent_install
+      failed_when: k3s_agent_install.rc != 0
+
+    - name: Display K3s agent installation output
+      debug:
+        var: k3s_agent_install.stdout_lines
+      when: k3s_agent_install.stdout_lines is defined
+
+    - name: Display K3s agent installation errors
+      debug:
+        var: k3s_agent_install.stderr_lines
+      when: k3s_agent_install.stderr_lines is defined
+
+    - name: Check for K3s binary in multiple locations
+      stat:
+        path: "{{ item }}"
+      register: k3s_binary_locations
+      with_items:
+        - /usr/local/bin/k3s
+        - /usr/bin/k3s
+        - /opt/k3s/bin/k3s
+
+    - name: Verify K3s agent binary exists
+      set_fact:
+        k3s_binary_found: "{{ k3s_binary_locations.results | selectattr('stat.exists', 'equalto', true) | list | length > 0 }}"
+
+    - name: Display binary check results
+      debug:
+        msg: "K3s binary found: {{ k3s_binary_found }}"
+
+    - name: Fail if K3s agent binary not found
+      fail:
+        msg: "K3s agent binary not found after installation. Checked paths: /usr/local/bin/k3s, /usr/bin/k3s, /opt/k3s/bin/k3s"
+      when: not k3s_binary_found
+
+    - name: Check for K3s agent service
+      stat:
+        path: /etc/systemd/system/k3s-agent.service
+      register: k3s_agent_service_file
+
+    - name: Start and enable K3s agent service
+      systemd:
+        name: k3s-agent
+        state: started
+        enabled: yes
+        daemon_reload: yes
+      when: k3s_agent_service_file.stat.exists
+
+    - name: Display service status
+      shell: systemctl status k3s-agent
+      register: agent_service_status
+      ignore_errors: yes
+
+    - name: Display agent service status
+      debug:
+        var: agent_service_status.stdout_lines
+
+    - name: Wait for worker node to join cluster
+      shell: sleep 30
+      changed_when: false
+
+- name: Verify Cluster Setup
+  hosts: k3s_masters
+  become: yes
+  
+  vars:
+    k3s_version: "v1.28.5+k3s1"
+    k3s_token_file: "/var/lib/rancher/k3s/server/node-token"
+    k3s_config_dir: "/etc/rancher/k3s"
+    k3s_service_file: "/etc/systemd/system/k3s.service"
+  
+  tasks:
+    - name: Wait for all nodes to be ready
+      shell: kubectl get nodes --no-headers | wc -l
+      register: node_count
+      until: node_count.stdout | int >= (groups['k3s_masters'] | length + groups['k3s_workers'] | length)
+      retries: 30
+      delay: 10
+      
+    - name: Get all nodes
+      shell: kubectl get nodes -o wide
+      register: all_nodes
+      
+    - name: Display all nodes
+      debug:
+        var: all_nodes.stdout_lines
+        
+    - name: Get cluster info
+      shell: kubectl cluster-info
+      register: cluster_info
+      
+    - name: Display cluster info
+      debug:
+        var: cluster_info.stdout_lines
+        
+    - name: Get system pods
+      shell: kubectl get pods --all-namespaces
+      register: system_pods
+      
+    - name: Display system pods
+      debug:
+        var: system_pods.stdout_lines
+        
+    - name: Get services
+      shell: kubectl get services --all-namespaces
+      register: services
+      
+    - name: Display services
+      debug:
+        var: services.stdout_lines
+        
+    - name: Test cluster connectivity
+      shell: kubectl run test-pod --image=nginx --restart=Never
+      ignore_errors: yes
+      
+    - name: Wait for test pod to be ready
+      shell: kubectl wait --for=condition=Ready pod/test-pod --timeout=60s
+      ignore_errors: yes
+      
+    - name: Get test pod status
+      shell: kubectl get pod test-pod
+      register: test_pod
+      ignore_errors: yes
+      
+    - name: Display test pod status
+      debug:
+        var: test_pod.stdout_lines
+      ignore_errors: yes
+      
+    - name: Clean up test pod
+      shell: kubectl delete pod test-pod
+      ignore_errors: yes
+
+- name: Generate Cluster Summary
+  hosts: k3s_masters
+  become: yes
+  
+  vars:
+    k3s_version: "v1.28.5+k3s1"
+    k3s_token_file: "/var/lib/rancher/k3s/server/node-token"
+    k3s_config_dir: "/etc/rancher/k3s"
+    k3s_service_file: "/etc/systemd/system/k3s.service"
+  
+  tasks:
+    - name: Create cluster summary
+      shell: |
+        echo "=== K3s Multi-Node Cluster Summary ===" > /tmp/cluster-summary.txt
+        echo "Date: $(date)" >> /tmp/cluster-summary.txt
+        echo "" >> /tmp/cluster-summary.txt
+        echo "=== Nodes ===" >> /tmp/cluster-summary.txt
+        kubectl get nodes -o wide >> /tmp/cluster-summary.txt
+        echo "" >> /tmp/cluster-summary.txt
+        echo "=== Cluster Info ===" >> /tmp/cluster-summary.txt
+        kubectl cluster-info >> /tmp/cluster-summary.txt
+        echo "" >> /tmp/cluster-summary.txt
+        echo "=== System Pods ===" >> /tmp/cluster-summary.txt
+        kubectl get pods --all-namespaces >> /tmp/cluster-summary.txt
+        
+    - name: Display cluster summary
+      shell: cat /tmp/cluster-summary.txt
+      register: summary
+      
+    - name: Show summary
+      debug:
+        var: summary.stdout_lines 

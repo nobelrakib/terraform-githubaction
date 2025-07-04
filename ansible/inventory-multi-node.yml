@@ -1,0 +1,46 @@
+---
+all:
+  children:
+    k3s_masters:
+      hosts:
+        k3s-master-01:
+          ansible_host: <MASTER_EC2_PRIVATE_IP>
+          ansible_user: ubuntu
+          ansible_ssh_private_key_file: ~/k3s-cluster/your-key.pem
+          node_role: master
+          node_type: control-plane
+    
+    k3s_workers:
+      hosts:
+        k3s-worker-01:
+          ansible_host: <WORKER1_EC2_PRIVATE_IP>
+          ansible_user: ubuntu
+          ansible_ssh_private_key_file: ~/k3s-cluster/your-key.pem
+          node_role: worker
+          node_type: compute
+        k3s-worker-02:
+          ansible_host: <WORKER2_EC2_PRIVATE_IP>
+          ansible_user: ubuntu
+          ansible_ssh_private_key_file: ~/k3s-cluster/your-key.pem
+          node_role: worker
+          node_type: compute
+        k3s-worker-03:
+          ansible_host: <WORKER3_EC2_PRIVATE_IP>
+          ansible_user: ubuntu
+          ansible_ssh_private_key_file: ~/k3s-cluster/your-key.pem
+          node_role: worker
+          node_type: compute
+    
+    k3s_cluster:
+      children:
+        k3s_masters:
+        k3s_workers:
+  
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    ansible_ssh_pipelining: true
+    ansible_timeout: 30
+    k3s_version: "v1.28.5+k3s1"
+    cluster_name: "k3s-cluster"
+    domain: "cluster.local" 
