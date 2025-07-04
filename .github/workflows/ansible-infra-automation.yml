@@ -109,8 +109,4 @@ jobs:
           echo "Getting cluster information..."
           ansible k3s_masters -m shell -a "sudo kubectl cluster-info" -v
 
-      - name: Check K3s service status
-        run: |
-          cd ansible
-          echo "Checking K3s service status on all nodes..."
-          ansible all -m shell -a "systemctl status k3s" -v 
+      
