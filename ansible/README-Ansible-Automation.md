@@ -205,3 +205,4 @@ This creates a complete CI/CD pipeline:
 1. **Terraform** provisions the infrastructure
 2. **Ansible** configures the infrastructure
 3. **Both workflows** can run independently or together 
+
