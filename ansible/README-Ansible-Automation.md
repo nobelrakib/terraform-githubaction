@@ -6,7 +6,6 @@ This document explains the separate Ansible automation workflow that automatical
 
 The **ansible-infra-automation** workflow is a dedicated GitHub Actions workflow that:
 
-
 1. **Triggers automatically** when changes are pushed to the `ansible/` folder
 2. **Can be triggered manually** via workflow dispatch with environment selection
 3. **Automatically gets EC2 instance information** from Terraform outputs
