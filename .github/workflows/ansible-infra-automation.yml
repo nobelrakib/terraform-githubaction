@@ -101,13 +101,13 @@ jobs:
         run: |
           cd ansible
           echo "Verifying cluster deployment..."
-          ansible k3s_masters -m shell -a "kubectl get nodes" -v
+          ansible k3s_masters -m shell -a "sudo kubectl get nodes" -v
 
       - name: Get cluster information
         run: |
           cd ansible
           echo "Getting cluster information..."
-          ansible k3s_masters -m shell -a "kubectl cluster-info" -v
+          ansible k3s_masters -m shell -a "sudo kubectl cluster-info" -v
 
       - name: Check K3s service status
         run: |
