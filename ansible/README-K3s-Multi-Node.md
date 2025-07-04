@@ -2,6 +2,7 @@
 
 This project contains Ansible playbooks to automatically deploy a multi-node K3s cluster on EC2 Ubuntu instances. The playbook runs from a separate control node EC2 instance.
 
+
 ## Architecture
 
 ```
