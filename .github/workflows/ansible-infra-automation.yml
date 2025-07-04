@@ -1,19 +1,11 @@
 name: "ansible-infra-automation"
 on:
   push:
-    branches:
-      - main
-      - stage
-    paths:
-      - 'ansible/**'
-    
+    branches: [main, stage,infra-automation-with-github-action-ansible]
+    paths: ['ansible/**']
   pull_request:
-    branches:
-      - main
-    paths:
-      - 'ansible/**'
-    
-  # Manual trigger for Ansible automation
+    branches: [main]
+    paths: ['ansible/**']
   workflow_dispatch:
     inputs:
       run_ansible:
@@ -26,22 +18,18 @@ on:
         required: false
         default: 'dev'
         type: choice
-        options:
-          - dev
-          - stage
-          - prod
+        options: [dev, stage, prod]
 
 env:
- AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
- AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
- BUCKET_TF_STATE: ${{ secrets.BUCKET_TF_STATE}}
- AWS_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  BUCKET_TF_STATE: ${{ secrets.BUCKET_TF_STATE}}
+  AWS_REGION: us-east-1
 
 jobs:
-  # Job to get infrastructure information from Terraform
   get-infrastructure:
     name: "Get Infrastructure Information"
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted]
     outputs:
       public_ip: ${{ steps.get_instances.outputs.public_ip }}
       private_ips: ${{ steps.get_instances.outputs.private_ips }}
@@ -49,9 +37,10 @@ jobs:
     defaults:
       run:
         shell: bash
+        working-directory: k3s-cluster
 
     steps:
-      - name: Checkout source code 
+      - name: Checkout source code
         uses: actions/checkout@v4
 
       - name: Setup Terraform
@@ -63,23 +52,16 @@ jobs:
       - name: Get EC2 instance information
         id: get_instances
         run: |
-          # Get public IPs of EC2 instances
           PUBLIC_IP=$(terraform output -raw public_instance_ip 2>/dev/null || echo "")
           PRIVATE_IPS=$(terraform output -json private_instance_ips 2>/dev/null || echo "[]")
           DATABASE_IP=$(terraform output -raw database_instance_ip 2>/dev/null || echo "")
-          
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
           echo "private_ips=$PRIVATE_IPS" >> $GITHUB_OUTPUT
           echo "database_ip=$DATABASE_IP" >> $GITHUB_OUTPUT
-          
-          echo "Public IP: $PUBLIC_IP"
-          echo "Private IPs: $PRIVATE_IPS"
-          echo "Database IP: $DATABASE_IP"
 
-  # Main Ansible automation job
   ansible-automation:
     name: "Ansible Infrastructure Automation"
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted]
     needs: get-infrastructure
     if: |
       github.event_name == 'push' && contains(github.event.head_commit.modified, 'ansible/') ||
@@ -87,9 +69,10 @@ jobs:
     defaults:
       run:
         shell: bash
+        working-directory: k3s-cluster
 
     steps:
-      - name: Checkout source code 
+      - name: Checkout source code
         uses: actions/checkout@v4
 
       - name: Setup Ansible
@@ -97,18 +80,8 @@ jobs:
           sudo apt update
           sudo apt install -y ansible python3-pip git curl wget jq
 
-      - name: Create SSH key for Ansible
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H github.com >> ~/.ssh/known_hosts
-
       - name: Create dynamic inventory
         run: |
-          cd ansible
-          
-          # Create inventory from Terraform outputs
           cat > inventory-dynamic.yml << EOF
           ---
           all:
@@ -118,26 +91,20 @@ jobs:
                   k3s-master-01:
                     ansible_host: ${{ needs.get-infrastructure.outputs.public_ip }}
                     ansible_user: ubuntu
-                    ansible_ssh_private_key_file: ~/.ssh/id_rsa
+                    ansible_ssh_private_key_file: ./dev-key.pem
                     node_role: master
                     node_type: control-plane
-              
               k3s_workers:
                 hosts:
                   k3s-worker-01:
                     ansible_host: $(echo '${{ needs.get-infrastructure.outputs.private_ips }}' | jq -r '.[0]' 2>/dev/null || echo "")
                     ansible_user: ubuntu
-                    ansible_ssh_private_key_file: ~/.ssh/id_rsa
-                  k3s-worker-02:
-                    ansible_host: $(echo '${{ needs.get-infrastructure.outputs.private_ips }}' | jq -r '.[1]' 2>/dev/null || echo "")
-                    ansible_user: ubuntu
-                    ansible_ssh_private_key_file: ~/.ssh/id_rsa
-              
+                    ansible_ssh_private_key_file: ./dev-key.pem
+                  
               k3s_cluster:
                 children:
                   k3s_masters:
                   k3s_workers:
-            
             vars:
               ansible_python_interpreter: /usr/bin/python3
               ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
@@ -147,13 +114,12 @@ jobs:
 
       - name: Create Ansible configuration
         run: |
-          cd ansible
           cat > ansible.cfg << EOF
           [defaults]
           host_key_checking = False
           inventory = inventory-dynamic.yml
           remote_user = ubuntu
-          private_key_file = ~/.ssh/id_rsa
+          private_key_file = ./dev-key.pem
           timeout = 30
           gathering = smart
           fact_caching = memory
@@ -164,37 +130,31 @@ jobs:
 
       - name: Display inventory structure
         run: |
-          cd ansible
           echo "Displaying inventory structure..."
           ansible-inventory --list -y
 
       - name: Test connectivity to EC2 instances
         run: |
-          cd ansible
           echo "Testing connectivity to all nodes..."
           ansible all -m ping -v
 
       - name: Run K3s cluster setup playbook
         run: |
-          cd ansible
           echo "Deploying K3s multi-node cluster..."
           ansible-playbook k3s-multi-node-cluster.yml -v
 
       - name: Verify cluster deployment
         run: |
-          cd ansible
           echo "Verifying cluster deployment..."
           ansible k3s_masters -m shell -a "kubectl get nodes" -v
 
       - name: Get cluster information
         run: |
-          cd ansible
           echo "Getting cluster information..."
           ansible k3s_masters -m shell -a "kubectl cluster-info" -v
 
       - name: Check K3s service status
         run: |
-          cd ansible
           echo "Checking K3s service status on all nodes..."
           ansible all -m shell -a "systemctl status k3s" -v
 
@@ -216,12 +176,6 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y ansible python3-pip git curl wget jq
-
-      - name: Create SSH key for Ansible
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
 
       - name: Run additional playbooks
         run: |
