@@ -17,34 +17,14 @@ jobs:
   get-infrastructure:
     name: "Get Infrastructure Information"
     runs-on: [self-hosted]
-    outputs:
-      public_ip: ${{ steps.get_instances.outputs.public_ip }}
-      private_ips: ${{ steps.get_instances.outputs.private_ips }}
-      database_ip: ${{ steps.get_instances.outputs.database_ip }}
+    
     defaults:
       run:
         shell: bash
         working-directory: k3s-cluster
 
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-
-      - name: Terraform init
-        run: terraform init -backend-config="bucket=$BUCKET_TF_STATE"
-
-      - name: Get EC2 instance information
-        id: get_instances
-        run: |
-          PUBLIC_IP=$(terraform output -raw public_instance_ip 2>/dev/null || echo "")
-          PRIVATE_IPS=$(terraform output -json private_instance_ips 2>/dev/null || echo "[]")
-          DATABASE_IP=$(terraform output -raw database_instance_ip 2>/dev/null || echo "")
-          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
-          echo "private_ips=$PRIVATE_IPS" >> $GITHUB_OUTPUT
-          echo "database_ip=$DATABASE_IP" >> $GITHUB_OUTPUT
+    
+      
 
   ansible-automation:
     name: "Ansible Infrastructure Automation"
@@ -76,7 +56,7 @@ jobs:
               k3s_masters:
                 hosts:
                   k3s-master-01:
-                    ansible_host: ${{ needs.get-infrastructure.outputs.public_ip }}
+                    ansible_host: 10.0.2.206
                     ansible_user: ubuntu
                     ansible_ssh_private_key_file: ./dev-key.pem
                     node_role: master
@@ -84,7 +64,7 @@ jobs:
               k3s_workers:
                 hosts:
                   k3s-worker-01:
-                    ansible_host: $(echo '${{ needs.get-infrastructure.outputs.private_ips }}' | jq -r '.[0]' 2>/dev/null || echo "")
+                    ansible_host: 10.0.2.20
                     ansible_user: ubuntu
                     ansible_ssh_private_key_file: ./dev-key.pem
                   
