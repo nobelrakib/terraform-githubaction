@@ -4,6 +4,7 @@ This document explains the separate Ansible automation workflow that automatical
 
 ## Overview
 
+
 The **ansible-infra-automation** workflow is a dedicated GitHub Actions workflow that:
 
 1. **Triggers automatically** when changes are pushed to the `ansible/` folder
